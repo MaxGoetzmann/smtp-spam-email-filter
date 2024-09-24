@@ -2,11 +2,14 @@ import hashlib
 import os
 import pickle
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from math import ceil
 
 from keybert import KeyBERT
 from pandas import DataFrame, concat, get_dummies
+from textblob import TextBlob
+from tqdm import tqdm
 
 # csv outputs
 METADATA_PATH = "email_metadata.csv"
@@ -23,8 +26,8 @@ K_MEANS_CT = 4
 
 # Keyword finding arguments
 KW_DIM = (1, 2)
-EMBED_MOST_FREQUENT = 500
 KW_DIVERSITY = 0.7
+EMBED_MOST_FREQUENT = 1000
 
 # Adjust number of keywords to extract from each email part
 SUBJECT_KW_CT = 5
@@ -248,11 +251,12 @@ def stash_old_file(file_path):
         print(f"Error copying file: {e}")
 
 
-def get_email_sentiment():
-    pass
+def get_sentiment(text):
+    blob = TextBlob(text)
+    return blob.sentiment.polarity, blob.sentiment.subjectivity
 
 
-def get_email_keywords():
+def get_keywords(text):
     pass
 
 
@@ -292,30 +296,43 @@ def one_hot_encode_column(df, column_name):
     return df_encoded
 
 
-def keyword_extraction(row, kw_model: KeyBERT):
-    def keyword_extraction_helper(row, part, kw_ct, serve_field_iter):
+def keyword_extraction(df, kw_model: KeyBERT, diversity=KW_DIVERSITY, dims=KW_DIM):
+    def keyword_extraction_helper(text, kw_ct, field_iter, index):
         keywords = kw_model.extract_keywords(
-            row[part],
-            keyphrase_ngram_range=KW_DIM,
+            text,
+            keyphrase_ngram_range=dims,
             top_n=kw_ct,
             stop_words=None,
             use_mmr=True,
-            diversity=KW_DIVERSITY,
+            diversity=diversity,
         )
         kw_base = 0
-        for j in serve_field_iter:
-            row[j] = keywords[kw_base]
+        for j in field_iter:
+            if kw_base < len(keywords):
+                df.loc[index, j] = keywords[kw_base][0]
             kw_base += 1
 
-    keyword_extraction_helper(
-        row,
-        DDUP_FIELD_SUBJECT,
-        SUBJECT_KW_CT,
-        serve_subject_keyword_fields(),
-    )
-    keyword_extraction_helper(
-        row,
-        DDUP_FIELD_BODY,
-        BODY_KW_CT,
-        serve_body_keyword_fields(),
-    )
+    def process_row(index, row):
+        keyword_extraction_helper(
+            row[DDUP_FIELD_SUBJECT],
+            SUBJECT_KW_CT,
+            subject_iter,
+            index,
+        )
+        keyword_extraction_helper(row[DDUP_FIELD_BODY], BODY_KW_CT, body_iter, index)
+
+    subject_iter = serve_subject_keyword_fields()
+    body_iter = serve_body_keyword_fields()
+
+    with ThreadPoolExecutor() as executor:
+        # Submit tasks for each row to the executor
+        futures = {executor.submit(process_row, i, row): i for i, row in df.iterrows()}
+
+        # Wait for all futures to complete
+        for future in tqdm(
+            as_completed(futures), total=len(futures), desc="Extracting keywords"
+        ):
+            try:
+                future.result()
+            except:
+                pass

@@ -5,6 +5,7 @@ from email.parser import BytesParser
 
 import pandas as pd
 from bs4 import BeautifulSoup
+from keybert import KeyBERT
 from tqdm import tqdm
 
 import utils
@@ -158,7 +159,7 @@ def write_eml_to_df(emails, is_useful):
         else:
             existing_ddup.add(approx_hash)
 
-            polarity, subjectivity = utils.get_email_sentiment()
+            polarity, subjectivity = utils.get_sentiment()
 
             new_ddup_row = {
                 utils.DDUP_FIELD_APPROX_HASH: approx_hash,
@@ -209,6 +210,9 @@ def main():
     #     print("-" * 40)
 
     meta, ddup = write_eml_to_df(emails_info, args.is_useful)
+
+    print(meta)
+    print(ddup)
 
 
 if __name__ == "__main__":
